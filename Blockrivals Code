@@ -1,0 +1,239 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Block Rivals</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+  canvas{display:block;width:100%;height:100%}
+  #hud{position:fixed;left:0;top:0;right:0;bottom:0;pointer-events:none;color:#fff;text-shadow:0 0 4px #000}
+  #cross{position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border:2px solid #fff;border-radius:50%;opacity:.8}
+  #stats{position:absolute;left:12px;top:10px;font-size:18px}
+  #emote{position:absolute;left:50%;top:18%;transform:translateX(-50%);font-size:48px;opacity:0;transition:opacity .3s}
+  #menu{position:fixed;inset:0;background:rgba(0,0,0,.75);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;z-index:5}
+  #menu button{font-size:24px;padding:14px 36px;margin-top:20px;border:0;border-radius:10px;background:#2aa3ff;color:#fff}
+  .btn{position:fixed;width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.25);border:2px solid rgba(255,255,255,.6);color:#fff;font-size:14px;display:none;align-items:center;justify-content:center;pointer-events:auto;z-index:4}
+  #stick{position:fixed;left:24px;bottom:24px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.4);display:none;z-index:4}
+  #knob{position:absolute;left:40px;top:40px;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.6)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"><div id="cross"></div><div id="stats"></div><div id="emote"></div></div>
+<div id="stick"><div id="knob"></div></div>
+<div class="btn" id="bFire" style="right:30px;bottom:110px;width:80px;height:80px">FIRE</div>
+<div class="btn" id="bJump" style="right:120px;bottom:40px">JUMP</div>
+<div class="btn" id="bSwap" style="right:30px;bottom:30px">SWAP</div>
+<div class="btn" id="bRel" style="right:120px;bottom:120px">RELOAD</div>
+<div class="btn" id="e1" style="right:210px;top:20px;width:50px;height:50px">&#128515;</div>
+<div class="btn" id="e2" style="right:150px;top:20px;width:50px;height:50px">&#128077;</div>
+<div class="btn" id="e3" style="right:90px;top:20px;width:50px;height:50px">&#128128;</div>
+<div class="btn" id="e4" style="right:30px;top:20px;width:50px;height:50px">&#128081;</div>
+<div id="menu"><h1>BLOCK RIVALS</h1><p>Beat the bots. Gun and Armature Knife.</p><button id="play">PLAY</button></div>
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 20, 80);
+const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 200);
+camera.rotation.order = 'YXZ';
+scene.add(camera);
+function resize(){renderer.setSize(innerWidth, innerHeight, false);camera.aspect = innerWidth/innerHeight;camera.updateProjectionMatrix();}
+addEventListener('resize', resize); resize();
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x556655, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(10,20,5); scene.add(sun);
+
+// Arena
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(80,80), new THREE.MeshLambertMaterial({color:0x5bbf5b}));
+ground.rotation.x = -Math.PI/2; scene.add(ground);
+const walls = [];
+function box(x,y,z,w,h,d,color){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshLambertMaterial({color}));
+  m.position.set(x,y,z); scene.add(m); walls.push(m); return m;
+}
+box(0,2,-40,80,4,1,0x888888); box(0,2,40,80,4,1,0x888888);
+box(-40,2,0,1,4,80,0x888888); box(40,2,0,1,4,80,0x888888);
+for(let i=0;i<14;i++){
+  const w=2+Math.random()*4, h=1.5+Math.random()*3;
+  box((Math.random()-.5)*60, h/2, (Math.random()-.5)*60, w, h, 2+Math.random()*4, [0xe74c3c,0xf1c40f,0x9b59b6,0x3498db][i%4]);
+}
+
+// Player
+const player = {pos:new THREE.Vector3(0,1.6,25), vel:new THREE.Vector3(), yaw:0, pitch:0, hp:100, onGround:true, ammo:12, mag:12, reloading:0, weapon:0, cooldown:0, kills:0};
+
+// Viewmodels: gun and armature knife
+const gun = new THREE.Group();
+const gunBody = new THREE.Mesh(new THREE.BoxGeometry(.12,.14,.6), new THREE.MeshLambertMaterial({color:0x333333}));
+const gunTop = new THREE.Mesh(new THREE.BoxGeometry(.08,.06,.5), new THREE.MeshLambertMaterial({color:0x2aa3ff}));
+gunTop.position.y = .09; gun.add(gunBody, gunTop);
+gun.position.set(.3,-.28,-.6); camera.add(gun);
+
+// Knife built with a bone-style hierarchy: root -> arm -> wrist -> blade (like an armature)
+const knife = new THREE.Group();
+const kRoot = new THREE.Object3D(), kArm = new THREE.Object3D(), kWrist = new THREE.Object3D();
+knife.add(kRoot); kRoot.add(kArm); kArm.add(kWrist);
+const bladeMat = new THREE.MeshBasicMaterial({color:0x00ffff});
+const blade = new THREE.Mesh(new THREE.BoxGeometry(.05,.5,.02), bladeMat); blade.position.y = .3;
+const handle = new THREE.Mesh(new THREE.BoxGeometry(.07,.2,.07), new THREE.MeshLambertMaterial({color:0x553311})); handle.position.y = -.05;
+const guard = new THREE.Mesh(new THREE.BoxGeometry(.2,.03,.05), new THREE.MeshLambertMaterial({color:0xffd700})); guard.position.y = .06;
+kWrist.add(blade, handle, guard);
+knife.position.set(.35,-.35,-.6); knife.visible = false; camera.add(knife);
+let knifeAnim = 0, drawAnim = 0, hue = 0;
+
+// Bots
+const bots = [];
+function spawnBot(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(.9,1.2,.5), new THREE.MeshLambertMaterial({color:0xff4444}));
+  body.position.y = 1.0;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(.6,.6,.6), new THREE.MeshLambertMaterial({color:0xffcc99}));
+  head.position.y = 1.9;
+  g.add(body, head);
+  g.position.set((Math.random()-.5)*60, 0, -10-Math.random()*25);
+  g.userData = {hp:60, cd:2+Math.random()*2};
+  scene.add(g); bots.push(g);
+}
+for(let i=0;i<6;i++) spawnBot();
+
+// Input
+const keys = {}; let firing = false, locked = false;
+addEventListener('keydown', e => { keys[e.code] = true;
+  if(e.code==='Digit1') setWeapon(0); if(e.code==='Digit2') setWeapon(1);
+  if(e.code==='KeyR') reload(); if(e.code==='KeyQ') swap();
+  if(e.code==='Digit3') emote('😃'); if(e.code==='Digit4') emote('👍'); if(e.code==='Digit5') emote('💀'); if(e.code==='Digit6') emote('👑');
+});
+addEventListener('keyup', e => keys[e.code] = false);
+canvas.addEventListener('mousedown', () => { if(!isTouch){ if(!locked) canvas.requestPointerLock(); firing = true; }});
+addEventListener('mouseup', () => firing = false);
+document.addEventListener('pointerlockchange', () => locked = document.pointerLockElement === canvas);
+addEventListener('mousemove', e => { if(locked){ player.yaw -= e.movementX*.002; player.pitch = Math.max(-1.5, Math.min(1.5, player.pitch - e.movementY*.002)); }});
+
+// Touch controls
+const stick = document.getElementById('stick'), knob = document.getElementById('knob');
+let stickId = null, lookId = null, lastLook = null; const move = {x:0,y:0};
+function bindBtn(id, down, up){ const el = document.getElementById(id);
+  el.addEventListener('touchstart', e => { e.preventDefault(); down(); }, {passive:false});
+  el.addEventListener('touchend', e => { e.preventDefault(); if(up) up(); }, {passive:false}); }
+bindBtn('bFire', () => firing = true, () => firing = false);
+bindBtn('bJump', jump); bindBtn('bSwap', swap); bindBtn('bRel', reload);
+bindBtn('e1', () => emote('😃')); bindBtn('e2', () => emote('👍')); bindBtn('e3', () => emote('💀')); bindBtn('e4', () => emote('👑'));
+canvas.addEventListener('touchstart', e => { e.preventDefault();
+  for(const t of e.changedTouches){
+    if(t.clientX < innerWidth*.4 && stickId === null){ stickId = t.identifier; }
+    else if(lookId === null){ lookId = t.identifier; lastLook = {x:t.clientX, y:t.clientY}; }
+  }}, {passive:false});
+canvas.addEventListener('touchmove', e => { e.preventDefault();
+  for(const t of e.changedTouches){
+    if(t.identifier === stickId){
+      const r = stick.getBoundingClientRect(); const cx = r.left+60, cy = r.top+60;
+      let dx = t.clientX-cx, dy = t.clientY-cy; const len = Math.hypot(dx,dy), max = 50;
+      if(len>max){dx*=max/len; dy*=max/len;}
+      knob.style.left = (40+dx)+'px'; knob.style.top = (40+dy)+'px';
+      move.x = dx/max; move.y = dy/max;
+    } else if(t.identifier === lookId){
+      player.yaw -= (t.clientX-lastLook.x)*.005;
+      player.pitch = Math.max(-1.5, Math.min(1.5, player.pitch - (t.clientY-lastLook.y)*.005));
+      lastLook = {x:t.clientX, y:t.clientY};
+    }
+  }}, {passive:false});
+canvas.addEventListener('touchend', e => {
+  for(const t of e.changedTouches){
+    if(t.identifier === stickId){ stickId = null; move.x = move.y = 0; knob.style.left = '40px'; knob.style.top = '40px'; }
+    if(t.identifier === lookId){ lookId = null; }
+  }});
+
+// Actions
+function setWeapon(w){ player.weapon = w; gun.visible = w===0; knife.visible = w===1; drawAnim = 1; }
+function swap(){ setWeapon(1 - player.weapon); }
+function jump(){ if(player.onGround){ player.vel.y = 7; player.onGround = false; } }
+function reload(){ if(player.weapon===0 && player.reloading<=0 && player.ammo<player.mag) player.reloading = 1.2; }
+let emoteTimer = 0;
+function emote(sym){ const el = document.getElementById('emote'); el.textContent = sym; el.style.opacity = 1; clearTimeout(emoteTimer); emoteTimer = setTimeout(() => el.style.opacity = 0, 1800); }
+
+const ray = new THREE.Raycaster();
+function hitscan(range){
+  ray.setFromCamera(new THREE.Vector2(0,0), camera); ray.far = range;
+  const hits = ray.intersectObjects(bots, true);
+  if(hits.length){ let o = hits[0].object; while(o.parent && !bots.includes(o)) o = o.parent;
+    const wallHit = ray.intersectObjects(walls)[0];
+    if(!wallHit || wallHit.distance > hits[0].distance) return o; }
+  return null;
+}
+function hurtBot(b, dmg){ b.userData.hp -= dmg; b.children.forEach(c => c.material.emissive && c.material.emissive.set(0xffffff));
+  setTimeout(() => b.children.forEach(c => c.material.emissive && c.material.emissive.set(0x000000)), 80);
+  if(b.userData.hp <= 0){ scene.remove(b); bots.splice(bots.indexOf(b),1); player.kills++; setTimeout(spawnBot, 2000); } }
+
+function attack(){
+  if(player.cooldown>0 || player.reloading>0) return;
+  if(player.weapon===0){
+    if(player.ammo<=0){ reload(); return; }
+    player.ammo--; player.cooldown = .15; gun.position.z = -.5;
+    const b = hitscan(60); if(b) hurtBot(b, 20);
+  } else {
+    player.cooldown = .5; knifeAnim = 1;
+    const b = hitscan(3); if(b) hurtBot(b, 40);
+  }
+}
+
+// Game loop
+let playing = false, last = performance.now();
+const stats = document.getElementById('stats');
+function update(dt){
+  player.cooldown -= dt;
+  if(player.reloading>0){ player.reloading -= dt; if(player.reloading<=0) player.ammo = player.mag; }
+  let mx = (keys.KeyD?1:0)-(keys.KeyA?1:0)+move.x, mz = (keys.KeyS?1:0)-(keys.KeyW?1:0)+move.y;
+  const l = Math.hypot(mx,mz); if(l>1){mx/=l; mz/=l;}
+  const sp = 7, s = Math.sin(player.yaw), c = Math.cos(player.yaw);
+  const nx = player.pos.x + (mx*c + mz*s)*sp*dt, nz = player.pos.z + (-mx*s + mz*c)*sp*dt;
+  const blocked = (x,z) => walls.some(w => { const p = w.position, g = w.geometry.parameters; return Math.abs(x-p.x)<g.width/2+.4 && Math.abs(z-p.z)<g.depth/2+.4 && player.pos.y < p.y+g.height/2+.2; });
+  if(!blocked(nx, player.pos.z)) player.pos.x = nx;
+  if(!blocked(player.pos.x, nz)) player.pos.z = nz;
+  if(keys.Space) jump();
+  player.vel.y -= 20*dt; player.pos.y += player.vel.y*dt;
+  if(player.pos.y <= 1.6){ player.pos.y = 1.6; player.vel.y = 0; player.onGround = true; }
+  if(firing) attack();
+
+  bots.forEach(b => {
+    const dx = player.pos.x-b.position.x, dz = player.pos.z-b.position.z, d = Math.hypot(dx,dz);
+    b.rotation.y = Math.atan2(dx,dz);
+    if(d>8){ b.position.x += dx/d*2*dt; b.position.z += dz/d*2*dt; }
+    b.userData.cd -= dt;
+    if(d<30 && b.userData.cd<=0){ b.userData.cd = 1.5+Math.random(); if(Math.random()<.5){ player.hp -= 8; document.body.style.boxShadow = 'inset 0 0 80px red'; setTimeout(() => document.body.style.boxShadow = '', 120); } }
+  });
+  if(player.hp<=0){ player.hp = 100; player.pos.set(0,1.6,25); player.kills = 0; }
+
+  camera.position.copy(player.pos); camera.rotation.set(player.pitch, player.yaw, 0);
+  gun.position.z += (-.6 - gun.position.z)*10*dt;
+  gun.position.y = -.28 - (player.reloading>0 ? .15 : 0) - (drawAnim>0 ? drawAnim*.3 : 0);
+
+  // Armature-style knife animation: each bone gets its own rotation
+  hue = (hue + dt*.5) % 1; bladeMat.color.setHSL(hue, 1, .6);
+  if(drawAnim>0) drawAnim -= dt*3;
+  if(knifeAnim>0){ knifeAnim -= dt*3; const t = 1 - Math.max(knifeAnim,0);
+    kRoot.rotation.z = Math.sin(t*Math.PI)*.6;
+    kArm.rotation.x = -Math.sin(t*Math.PI)*1.2;
+    kWrist.rotation.z = -Math.sin(t*Math.PI)*1.0;
+  } else { kRoot.rotation.z = kArm.rotation.x = kWrist.rotation.z = 0; kWrist.rotation.y = drawAnim>0 ? drawAnim*6 : 0; }
+  knife.position.y = -.35 - (drawAnim>0 ? drawAnim*.3 : 0);
+
+  stats.textContent = 'HP ' + Math.max(0,Math.round(player.hp)) + '   Ammo ' + (player.reloading>0 ? 'reloading' : player.ammo + '/' + player.mag) + '   Kills ' + player.kills;
+}
+function loop(now){ const dt = Math.min(.05, (now-last)/1000); last = now; if(playing) update(dt); renderer.render(scene, camera); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+document.getElementById('play').addEventListener('click', () => {
+  document.getElementById('menu').style.display = 'none'; playing = true;
+  if(isTouch){ stick.style.display = 'block'; document.querySelectorAll('.btn').forEach(b => b.style.display = 'flex'); }
+  if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(()=>{});
+});
+</script>
+</body>
+</html>
